@@ -6,6 +6,7 @@ import json
 from dataclasses import asdict, dataclass
 
 from .analyze import STATUS_WORDS, Summary
+from .registry import ImageComparison
 
 MAX_COMMITS = 50
 MAX_KEYS_PER_FILE = 25
@@ -162,3 +163,50 @@ def render_json(s: Summary) -> str:
 
 
 RENDERERS = {"markdown": render_markdown, "json": render_json}
+
+
+# --- registry image comparison ----------------------------------------------
+
+def _size(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return ""
+
+
+def render_image_markdown(c: ImageComparison) -> str:
+    a, b = c.old, c.new
+    out = [f"# Image diff: {c.image} {a.ref} -> {b.ref}", ""]
+    if c.same_image:
+        out += [f"Both refs point at the same image (`{a.digest}`); nothing changed.", ""]
+    rows = [("Digest", _cell(a.digest), _cell(b.digest)),
+            ("Platform", _cell(a.platform), _cell(b.platform)),
+            ("Created", _cell(a.created), _cell(b.created)),
+            ("Layers", f"{len(a.layers)} ({_size(a.size)})", f"{len(b.layers)} ({_size(b.size)})")]
+    out += [f"| | `{a.ref}` | `{b.ref}` |", "|---|---|---|"]
+    out += [f"| {name} | {old} | {new} |" for name, old, new in rows]
+    if not c.same_image:
+        out += ["", f"{c.shared_layers} of {len(b.layers)} layers in `{b.ref}` are shared with `{a.ref}`"
+                    + ("; the base image or an early build step changed." if c.shared_layers == 0 and b.layers
+                       else ".")]
+    out += ["", "## Labels", ""]
+    if not c.labels:
+        out.append("No label differences.")
+    for k in c.labels:
+        if k.kind == "changed":
+            out.append(f"- changed `{k.key}`: {_code(k.old)} -> {_code(k.new)}")
+        elif k.kind == "added":
+            out.append(f"- added `{k.key}` = {_code(k.new)}")
+        else:
+            out.append(f"- removed `{k.key}` (was {_code(k.old)})")
+    return "\n".join(out) + "\n"
+
+
+def render_image_json(c: ImageComparison) -> str:
+    doc = asdict(c)
+    doc["same_image"] = c.same_image
+    return json.dumps(doc, indent=2) + "\n"
+
+
+IMAGE_RENDERERS = {"markdown": render_image_markdown, "json": render_image_json}
